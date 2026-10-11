@@ -1,0 +1,147 @@
+---
+title: "7. Non-Identical Bernoulli: Basketball Fatigue (Extra Credit)"
+subtitle: "Breaking the 'identically distributed' assumption"
+---
+
+```{r}
+#| label: setup
+source("R/clt_helpers.R")
+p_start <- 0.90
+p_end   <- 0.50
+# shot probabilities for a game of n shots, falling linearly from 0.9 to 0.5
+shot_probs <- function(n) seq(p_start, p_end, length.out = n)
+```
+
+## What process am I sampling from?
+
+From the class handout: a player gets tired over a game, so their chance of making a shot drops steadily from 0.90 on the first shot to 0.50 on the last shot. Each shot $X_t$ is 1 (make) or 0 (miss):
+
+$$
+X_t \sim \text{Bernoulli}(p_t), \qquad p_1 = 0.90, \; p_n = 0.50
+$$
+
+The shots are **independent** but **not identically distributed**, because each one has a different $p_t$. My "sample" is one game of $n$ shots, and $\bar X$ is the shooting percentage for that game.
+
+**How I'm extending it across $n$:** the handout uses 20 shots. To study sample size, I let the number of shots $n$ vary, and the probabilities always go from 0.90 down to 0.50 across however many shots there are. So a longer game is the same fatigue curve, just with more shots along the way. (I start at $n = 2$, since one shot can't go from 0.9 to 0.5.)
+
+```{r}
+#| label: population
+#| fig-height: 4
+p20 <- shot_probs(20)
+plot(1:20, p20, type = "b", pch = 19, col = "firebrick", ylim = c(0, 1),
+     xlab = "Shot number", ylab = "P(make)", main = "Fatigue model for a 20-shot game")
+abline(h = 0.7, lty = 2, col = "gray40")
+text(17, 0.73, "average p = 0.70", col = "gray40")
+```
+
+### Theory
+
+Since the shots are independent, means and variances just add up:
+
+$$
+E(\bar X) = \frac{1}{n}\sum_{t=1}^n p_t = 0.70, \qquad
+SE(\bar X) = \frac{1}{n}\sqrt{\sum_{t=1}^n p_t(1-p_t)}
+$$
+
+The total number of makes follows a **Poisson-binomial** distribution, not a regular binomial.
+
+A tempting mistake would be to treat every shot like a Bernoulli(0.70) and use $\sqrt{0.7 \cdot 0.3 / n}$. Let me see how far off that is:
+
+```{r}
+#| label: se-theory
+correct_se <- function(n) sqrt(sum(shot_probs(n) * (1 - shot_probs(n)))) / n
+naive_se   <- function(n) sqrt(0.7 * 0.3 / n)
+data.frame(n = c(20, 100, 500),
+           correct_SE = sapply(c(20, 100, 500), correct_se),
+           naive_SE   = sapply(c(20, 100, 500), naive_se),
+           ratio      = sapply(c(20, 100, 500), function(n) correct_se(n) / naive_se(n)))
+```
+
+The correct SE is about `r round(100 * (1 - correct_se(500) / naive_se(500)), 1)`% smaller. That's because $p(1-p)$ is largest at $p = 0.5$, and most of these shots have $p$ well away from 0.5, so they're individually *less* random than a 70% shot would be on average.
+
+## What did I expect?
+
+The usual CLT needs identical distributions, but there's a more general version (the Lindeberg/Lyapunov CLT) that works for independent, non-identical variables as long as no single observation dominates. Here every shot is a 0/1 with $p$ between 0.5 and 0.9, so no shot dominates. I predict:
+
+1. The mean will be 0.70 and the correct SE formula will match.
+2. The shape will converge about as fast as an **i.i.d. Bernoulli(0.7)** would, since the probabilities aren't that different from 0.7.
+3. The main thing slowing it down will be **discreteness**: a game of $n$ shots can only have a shooting percentage of $0, 1/n, 2/n, \dots, 1$.
+
+To test prediction 2, I also simulate the i.i.d. version where every shot is 70%.
+
+## Which sample sizes did I investigate?
+
+The standard grid without $n = 1$ (2 to 500 shots), with $B = `r format(B, big.mark = ",")`$ simulated games at each $n$.
+
+## Simulation
+
+Each column of the matrix is one game, and `rep(shot_probs(n), B)` lines up shot 1's probability with row 1, shot 2's with row 2, and so on.
+
+```{r}
+#| label: simulate
+gen_game <- function(n) function(k) rbinom(k, size = 1, prob = rep(shot_probs(n), B))
+sweep <- run_sweep(function(n) simulate_means(gen_game(n), n, B),
+                   ns = n_grid[n_grid >= 2],
+                   mu_fun = function(n) mean(shot_probs(n)),
+                   se_fun = correct_se)
+tab    <- sweep$table
+tab$se_ratio_naive <- tab$sim_se / sapply(tab$n, naive_se)
+n_star <- chosen_n(tab)
+show_table(tab)
+```
+
+```{r}
+#| label: iid-comparison
+sweep_iid <- run_sweep(function(n) simulate_means(function(k) rbinom(k, 1, 0.7), n, B),
+                       ns = n_grid[n_grid >= 2], mu = 0.7, sigma = sqrt(0.21))
+tab_iid    <- sweep_iid$table
+n_star_iid <- chosen_n(tab_iid)
+
+knitr::kable(data.frame(
+  n = tab$n,
+  skew_fatigue = round(tab$skewness, 3), skew_iid = round(tab_iid$skewness, 3),
+  qq_fatigue = round(tab$qq_cor, 4),     qq_iid = round(tab_iid$qq_cor, 4),
+  pass_fatigue = tab$normal_enough,      pass_iid = tab_iid$normal_enough
+), row.names = FALSE)
+```
+
+```{r}
+#| label: pictures
+#| fig-height: 12
+plot_sampling(sweep, c(2, 20, 50, n_star),
+              mu_fun = function(n) mean(shot_probs(n)), se_fun = correct_se)
+```
+
+```{r}
+#| label: convergence
+#| fig-height: 3.5
+plot_convergence(tab)
+```
+
+## Theory vs. simulation
+
+- **Mean:** the simulated shooting percentages are all within `r round(max(abs(tab$sim_mean - 0.7)), 3)` of 0.70.
+- **Standard error:** compared to the correct formula, the ratio ranges from `r round(min(tab$se_ratio), 3)` to `r round(max(tab$se_ratio), 3)`. Compared to the naive Bernoulli(0.7) formula, the ratio at $n = 500$ is `r round(tab$se_ratio_naive[tab$n == 500], 3)`, so the naive formula is a bit too big. It's not a huge error here, but it's a systematic one.
+- **Shape:** the fatigue model and the i.i.d. 70% model have almost the same skewness at each $n$. The skewness is **negative** because with an average of 70%, the shooting percentage piles up near the top and has a longer tail toward low values.
+
+## When is it approximately normal?
+
+$$
+\boxed{n = `r n_star`}
+$$
+
+For comparison, the i.i.d. Bernoulli(0.7) version reached my standard at $n = `r n_star_iid`$. Skewness and kurtosis were within my cutoffs much earlier (skewness first goes under 0.25 at $n = `r min(tab$n[abs(tab$skewness) < skew_cut])`$). The Q-Q correlation is what held it back, because the shooting percentage only has $n + 1$ possible values and the Q-Q plot looks like a staircase.
+
+So **non-identical distributions did not break the CLT here**. The thing that slowed it down was the 0/1 data being so discrete, which happens with or without fatigue.
+
+## What surprised me?
+
+I expected the fatigue to make things noticeably worse, but it barely mattered for the shape. The fatigue and constant-70% versions were almost the same at every $n$. The bigger lesson was about the SE: if I'd plugged in the average $p = 0.7$ and used the regular binomial formula, I would have slightly overstated the variability. "Average probability" is not the same as "every shot has the average probability."
+
+I also realized the CLT for non-identical data can fail if one observation is allowed to dominate. For example, if one shot were worth 100 points and all the others were worth 1, that one shot would control the whole total and the sum wouldn't look normal. That doesn't happen in this model, but it's the kind of thing to check in real data.
+
+```{r}
+#| label: save
+save_results("Non-identical Bernoulli (basketball)", tab, n_star,
+             "Not identical, but CLT still works; same pace as iid p = 0.7")
+```

@@ -1,0 +1,141 @@
+---
+title: "3. Exponential Population"
+subtitle: "Strong right skew, and a direct test of the 'n = 30' rule"
+---
+
+```{r}
+#| label: setup
+source("R/clt_helpers.R")
+rate <- 1
+gen_exp <- function(k) rexp(k, rate = rate)
+```
+
+## What population am I sampling from?
+
+Exponential with rate $\lambda = 1$, generated with `rexp()`. It's continuous, can't go below 0, and has a long **right tail**. It's the kind of shape you see for waiting times or wait-until-failure times.
+
+```{r}
+#| label: population
+#| fig-height: 4
+plot_population(gen_exp, "Population: Exponential(rate = 1)", xlim = c(0, 8))
+curve(dexp(x, rate), add = TRUE, col = "firebrick", lwd = 2)
+```
+
+| Quantity | Theoretical value |
+|---|---|
+| Mean $\mu = 1/\lambda$ | 1 |
+| SD $\sigma = 1/\lambda$ | 1 |
+| Skewness | 2 |
+| Excess kurtosis | 6 |
+| $SE(\bar X)$ | $1/\sqrt{n}$ |
+
+```{r}
+mu <- 1 / rate; sigma <- 1 / rate; g1 <- 2; g2 <- 6
+```
+
+## What did I expect?
+
+This is the case where I think $n = 30$ will **not** be enough. The skewness of $\bar X$ is $2/\sqrt{n}$, so at $n = 30$ it's still $2/\sqrt{30} \approx `r round(2/sqrt(30), 2)`$, which is above my 0.25 cutoff. Solving $2/\sqrt n < 0.25$:
+
+```{r}
+predicted_n(g1, g2)
+```
+
+My prediction: skewness is the bottleneck, and the answer lands somewhere around $n = 64$.
+
+## Which sample sizes did I investigate?
+
+The standard grid from 1 to 500, with $B = `r format(B, big.mark = ",")`$ repetitions. The grid is dense between 30 and 100 (30, 35, 40, 45, 50, 60, 70, 80, 90, 100), which is exactly where I expected the cutoff to be, so I can pin it down.
+
+## Simulation
+
+```{r}
+#| label: simulate
+sweep  <- run_sweep(function(n) simulate_means(gen_exp, n, B), mu = mu, sigma = sigma)
+tab    <- sweep$table
+n_star <- chosen_n(tab)
+show_table(tab)
+```
+
+```{r}
+#| label: pictures
+#| fig-height: 12
+plot_sampling(sweep, c(1, 5, 30, n_star), mu = mu, sigma = sigma)
+```
+
+```{r}
+#| label: convergence
+#| fig-height: 3.5
+plot_convergence(tab)
+```
+
+I also compared the simulated skewness to the theory curve $2/\sqrt n$:
+
+```{r}
+#| label: skew-vs-theory
+#| fig-height: 4
+plot(tab$n, tab$skewness, log = "x", pch = 19,
+     xlab = "n (log scale)", ylab = "Skewness of sample means",
+     main = "Simulated skewness vs. theory 2/sqrt(n)")
+curve(2 / sqrt(x), add = TRUE, col = "firebrick", lwd = 2)
+abline(h = skew_cut, lty = 2, col = "gray40")
+legend("topright", c("Simulated", "Theory 2/sqrt(n)", "My cutoff"),
+       col = c("black", "firebrick", "gray40"), pch = c(19, NA, NA),
+       lty = c(NA, 1, 2), bty = "n")
+```
+
+## Theory vs. simulation
+
+- **Mean:** every simulated mean is within `r round(max(abs(tab$sim_mean - mu)), 3)` of 1.
+- **Standard error:** simulated SE / $(1/\sqrt n)$ ranged from `r round(min(tab$se_ratio), 3)` to `r round(max(tab$se_ratio), 3)`. So the SE formula works at every $n$, even $n = 1$ where the shape is nowhere near normal. **The formula for the SE being right does not mean the shape is normal.** Those are two different questions.
+- **Shape:** the simulated skewness follows $2/\sqrt n$ really closely.
+
+At $n = 30$ specifically:
+
+```{r}
+knitr::kable(signif(tab[tab$n == 30, c("n", "skewness", "ex_kurt", "qq_cor", "shapiro_p")], 3))
+```
+
+## When is it approximately normal?
+
+$$
+\boxed{n = `r n_star`}
+$$
+
+That's very close to my prediction of 64. At $n = `r n_star`$ the skewness drops to `r round(tab$skewness[tab$n == n_star], 3)` and the Q-Q correlation reaches `r round(tab$qq_cor[tab$n == n_star], 4)`. Kurtosis was never the bottleneck: it passed my cutoff early, just like theory said. You can still see a slight upward bend at the right end of the Q-Q plot at $n = 30$, which is the leftover right skew.
+
+## Reproducibility experiment
+
+The assignment asks what happens with a different seed. I reran the exact same sweep, but with seeds based on 1234 instead of my ID:
+
+```{r}
+#| label: reproducibility
+sweep_alt <- run_sweep(function(n) simulate_means(gen_exp, n, B, seed = 1234 + n),
+                       mu = mu, sigma = sigma)
+tab_alt <- sweep_alt$table
+n_star_alt <- chosen_n(tab_alt)
+
+compare <- data.frame(
+  n = tab$n,
+  skew_my_seed  = round(tab$skewness, 3),
+  skew_alt_seed = round(tab_alt$skewness, 3),
+  pass_my_seed  = tab$normal_enough,
+  pass_alt_seed = tab_alt$normal_enough
+)
+knitr::kable(compare[compare$n >= 30 & compare$n <= 150, ], row.names = FALSE)
+```
+
+- **Did the exact results change?** Yes. Every number changes a little, because they're different random draws.
+- **Did my conclusion change?** With my seed the answer is $n = `r n_star`$ and with the other seed it's $n = `r n_star_alt`$. `r if (n_star == n_star_alt) "Same answer." else "Close, but not identical, because near the cutoff the skewness is only slightly above or below 0.25, so noise can tip it one way or the other."` The big conclusion (somewhere around 60 to 80, definitely not 30) doesn't change.
+
+What this tells me about Monte Carlo: the seed makes the *exact* numbers reproducible, but the *conclusion* should be robust to the seed. If changing the seed flipped my conclusion completely, it would mean $B$ is too small or my cutoff is right on the edge of the noise.
+
+## What surprised me?
+
+How well the theory predicted the simulation. I expected "about 60-ish" and the simulated skewness sat right on top of the $2/\sqrt n$ curve. I was also surprised that the SE formula was accurate at $n = 1$, when the histogram of means is literally just the exponential distribution. It made it clear that the CLT is a statement about **shape**, not about the mean or the SE.
+
+```{r}
+#| label: save
+save_results("Exponential", tab, n_star,
+             "Skewness 2/sqrt(n) is the bottleneck; n = 30 is not enough")
+```

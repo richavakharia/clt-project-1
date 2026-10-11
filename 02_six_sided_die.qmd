@@ -1,0 +1,91 @@
+---
+title: "2. Six-Sided Die"
+subtitle: "Discrete, flat, and perfectly symmetric"
+---
+
+```{r}
+#| label: setup
+source("R/clt_helpers.R")
+roll_die <- function(k) sample(1:6, size = k, replace = TRUE)
+```
+
+## What population am I sampling from?
+
+A fair die: values 1 through 6, each with probability 1/6, simulated with `sample(1:6, replace = TRUE)`. It's **discrete** (only 6 possible values), **bounded**, and **perfectly symmetric**, but it's flat instead of bell-shaped, so its tails are *lighter* than a normal's.
+
+```{r}
+#| label: population
+#| fig-height: 4
+plot_population(roll_die, "Population: Fair Six-Sided Die", discrete = TRUE)
+```
+
+```{r}
+#| label: theory
+values <- 1:6
+p      <- rep(1/6, 6)
+mu     <- sum(values * p)                         # 3.5
+sigma  <- sqrt(sum((values - mu)^2 * p))          # sqrt(35/12)
+g1     <- sum(((values - mu) / sigma)^3 * p)      # skewness
+g2     <- sum(((values - mu) / sigma)^4 * p) - 3  # excess kurtosis
+data.frame(mean = mu, sd = sigma, skewness = g1, excess_kurtosis = g2)
+```
+
+## What did I expect?
+
+Since the die is symmetric, skewness is 0 at every $n$, so skewness won't be the problem. The issue is the flat shape: excess kurtosis starts at `r round(g2, 3)` (light tails) and shrinks like $g_2/n$. I also expect discreteness to matter at small $n$ because the mean of $n$ rolls can only take $5n + 1$ different values.
+
+```{r}
+predicted_n(g1, g2)
+```
+
+The theory predicts my kurtosis cutoff is crossed around $n = 3$. I think the Q-Q plot will look "stair-steppy" for a while longer than that because of the discreteness, so my actual guess is somewhere between 3 and 10.
+
+## Which sample sizes did I investigate?
+
+The standard grid from 1 to 500 (same for every population), with $B = `r format(B, big.mark = ",")`$ repetitions at each $n$.
+
+## Simulation
+
+```{r}
+#| label: simulate
+sweep  <- run_sweep(function(n) simulate_means(roll_die, n, B), mu = mu, sigma = sigma)
+tab    <- sweep$table
+n_star <- chosen_n(tab)
+show_table(tab)
+```
+
+```{r}
+#| label: pictures
+#| fig-height: 12
+plot_sampling(sweep, c(1, 2, 5, n_star), mu = mu, sigma = sigma)
+```
+
+```{r}
+#| label: convergence
+#| fig-height: 3.5
+plot_convergence(tab)
+```
+
+## Theory vs. simulation
+
+- **Mean:** every simulated mean is within `r round(max(abs(tab$sim_mean - mu)), 3)` of 3.5.
+- **Standard error:** simulated SE / $(\sigma/\sqrt n)$ ranged from `r round(min(tab$se_ratio), 3)` to `r round(max(tab$se_ratio), 3)`. The formula works.
+- **Shape:** skewness stays near 0 the whole time (largest |skewness| = `r round(max(abs(tab$skewness)), 3)`), exactly as predicted. Kurtosis starts at `r round(tab$ex_kurt[1], 2)` and climbs toward 0.
+
+## When is it approximately normal?
+
+$$
+\boxed{n = `r n_star`}
+$$
+
+At $n = `r n_star`$ the skewness is `r round(tab$skewness[tab$n == n_star], 3)`, the excess kurtosis is `r round(tab$ex_kurt[tab$n == n_star], 3)`, and the Q-Q correlation is `r round(tab$qq_cor[tab$n == n_star], 4)`. Kurtosis actually passed my cutoff earlier (around $n = 3$, like theory said). The thing that held it back was the **Q-Q correlation**, because with only a handful of possible values the Q-Q plot is a staircase instead of a line.
+
+## What surprised me?
+
+At just $n = 2$ the histogram is already a triangle, and by $n = 5$ it honestly *looks* bell-shaped to the eye. But the Shapiro-Wilk test rejects normality at `r sum(tab$shapiro_p < 0.05)` of the `r nrow(tab)` sample sizes, including $n = 30$ (p = `r format(tab$shapiro_p[tab$n == 30], digits = 2)`). That's not because the shape is wrong. It's because the mean of $n$ dice can only take a limited set of values, and a test with 5,000 values is sensitive enough to notice the data is *discrete*. That's a good example of "statistically detectable" not being the same as "practically important."
+
+```{r}
+#| label: save
+save_results("Six-Sided Die", tab, n_star,
+             "Symmetric, so only light tails + discreteness slow it down")
+```

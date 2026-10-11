@@ -1,0 +1,190 @@
+---
+title: "6. Dependent Machine Failure (Extra Credit)"
+subtitle: "Breaking the independence assumption"
+---
+
+```{r}
+#| label: setup
+source("R/clt_helpers.R")
+baseline_rate  <- 1      # lambda_0
+beta           <- 1.25   # strength of dependence
+reference_time <- 1      # mu in the class handout
+burn_in        <- 100    # steps thrown away before each sample starts
+```
+
+## What process am I sampling from?
+
+This is the machine failure model from the class handout. $X_t$ is the operating time before failure $t$, and the failure rate for the next period depends on the last operating time:
+
+$$
+\lambda_t = \lambda_0 \, e^{\beta (X_{t-1} - \mu)}, \qquad
+X_t \mid X_{t-1} \sim \text{Exponential}(\lambda_t)
+$$
+
+with $\lambda_0 = 1$, $\beta = 1.25$, $\mu = 1$. A long run ($X_{t-1} > 1$) raises the next failure rate, so the next run tends to be short, and the other way around. That makes neighboring observations **negatively correlated**, so the observations in one sample are **not independent**.
+
+### Simulating many samples at once
+
+The handout simulates one machine with a `for` loop. To get $B = `r format(B, big.mark = ",")`$ samples quickly, I run $B$ machines side by side: `x` is a vector of length $B$, and each pass through the loop moves every machine forward one failure.
+
+I also added a **burn-in**: each machine runs for `r burn_in` failures before I start recording. Without it, every sample would start from the same baseline state, and that starting point would bias small-$n$ samples. With the burn-in, every sample comes from the process's long-run ("stationary") behavior.
+
+```{r}
+#| label: simulator
+# Returns B sample means, each the mean of n consecutive operating times
+simulate_dependent_means <- function(n, B, seed = student_id + n) {
+  set.seed(seed)
+  x <- rexp(B, rate = baseline_rate)                 # first operating time
+  for (t in 1:burn_in) {                             # warm up, don't record
+    x <- rexp(B, rate = baseline_rate * exp(beta * (x - reference_time)))
+  }
+  total <- 0
+  for (t in 1:n) {                                   # record n steps
+    x <- rexp(B, rate = baseline_rate * exp(beta * (x - reference_time)))
+    total <- total + x
+  }
+  total / n
+}
+```
+
+Note the order inside the loop is the same as the handout: use the previous time to get the new rate, then use the new rate to generate the new time.
+
+### What does the population look like?
+
+There's no simple formula for this process's long-run mean and SD, so I estimated them from one very long run (1,000,000 failures). With that many values, the estimates are basically exact.
+
+```{r}
+#| label: long-run
+set.seed(student_id)
+N <- 1e6
+E <- rexp(N)                     # Exp(1) draws; Exp(rate) = Exp(1) / rate
+chain <- numeric(N)
+chain[1] <- E[1] / baseline_rate
+for (t in 2:N) {
+  rate_t   <- baseline_rate * exp(beta * (chain[t - 1] - reference_time))
+  chain[t] <- E[t] / rate_t
+}
+chain <- chain[-(1:1000)]        # drop the start-up period
+
+mu    <- mean(chain)
+sigma <- sd(chain)
+lag_cor <- acf(chain, lag.max = 30, plot = FALSE)$acf[-1]
+
+data.frame(long_run_mean = mu, long_run_sd = sigma,
+           skewness = skewness(chain), lag1_correlation = lag_cor[1])
+```
+
+```{r}
+#| label: population
+#| fig-height: 7
+par(mfrow = c(2, 2), mar = c(4, 4, 2.5, 1))
+hist(chain[chain < 10], breaks = 80, freq = FALSE, col = "lightsteelblue",
+     border = "white", main = "Operating times (long run)", xlab = "Operating time")
+plot(chain[1:100], type = "b", pch = 19, cex = 0.6,
+     xlab = "Failure number", ylab = "Operating time", main = "First 100 failures")
+plot(chain[1:5000], chain[2:5001], pch = 20, col = rgb(0, 0, 0, 0.2),
+     xlim = c(0, 8), ylim = c(0, 8), xlab = "X[t-1]", ylab = "X[t]",
+     main = "Each time vs. the previous one")
+barplot(lag_cor[1:12], names.arg = 1:12, col = ifelse(lag_cor[1:12] > 0, "steelblue", "firebrick"),
+        xlab = "Lag", ylab = "Correlation", main = "Autocorrelation")
+abline(h = 0)
+```
+
+The autocorrelation alternates in sign (`r round(lag_cor[1], 2)`, `r round(lag_cor[2], 2)`, `r round(lag_cor[3], 2)`, ...): long, short, long, short. The lag-1 correlation is clearly negative, which matches the "a long run is followed by a short one" story.
+
+### The correct standard error under dependence
+
+The usual $SE = \sigma/\sqrt n$ assumes independence. With correlated data the variance of the mean picks up the covariances between observations. For large $n$:
+
+$$
+\operatorname{Var}(\bar X) \approx \frac{\sigma^2}{n}\left(1 + 2\sum_{k=1}^{\infty} \rho_k\right)
+$$
+
+```{r}
+#| label: long-run-se
+inflation <- 1 + 2 * sum(lag_cor)    # variance multiplier from the correlations
+sigma_lr  <- sigma * sqrt(inflation) # "long-run" SD
+data.frame(variance_multiplier = inflation,
+           SE_ratio_predicted  = sqrt(inflation),
+           effective_n_per_100 = 100 / inflation)
+```
+
+The multiplier is less than 1, so dependence here makes the sample mean **less** variable than the naive formula says. The naive formula should overstate the SE by about `r round(100 * (1 - sqrt(inflation)))`%. Put another way, 100 dependent observations carry about as much information as `r round(100 / inflation)` independent ones. Here dependence actually *helps*, because a long run tends to get canceled out by a short one.
+
+## What did I expect?
+
+1. **The mean:** I first assumed the mean would be 1, since the baseline rate is 1. It isn't. The long-run mean is `r round(mu, 3)`. (More on that under surprises.)
+2. **The SE:** the naive $\sigma/\sqrt n$ should be too big by about `r round(100 * (1 - sqrt(inflation)))`%.
+3. **The shape:** the operating times have skewness `r round(skewness(chain), 2)`, which is *more* skewed than the plain exponential (2). If the data were independent, my theory rule would predict about $n = `r ceiling((skewness(chain) / skew_cut)^2)`$. Dependence changes things, so I'm not confident in that number, but I expect this to need a bigger $n$ than the plain exponential.
+
+## Which sample sizes did I investigate?
+
+The standard grid from 1 to 500, with $B = `r format(B, big.mark = ",")`$ repetitions at each $n$.
+
+## Simulation
+
+```{r}
+#| label: simulate
+sweep  <- run_sweep(function(n) simulate_dependent_means(n, B), mu = mu, sigma = sigma)
+tab    <- sweep$table
+tab$se_ratio_adjusted <- tab$sim_se / (sigma_lr / sqrt(tab$n))
+n_star <- chosen_n(tab)
+show_table(tab)
+```
+
+The `se_ratio` column compares to the **naive** formula $\sigma/\sqrt n$. The `se_ratio_adjusted` column compares to the dependence-corrected formula.
+
+```{r}
+#| label: se-plot
+#| fig-height: 4
+plot(tab$n, tab$se_ratio, log = "x", type = "b", pch = 19, ylim = c(0.7, 1.1),
+     xlab = "n (log scale)", ylab = "Simulated SE / formula SE",
+     main = "Naive SE formula is too big under dependence")
+points(tab$n, tab$se_ratio_adjusted, type = "b", pch = 17, col = "steelblue")
+abline(h = 1, lty = 2)
+abline(h = sqrt(inflation), lty = 3, col = "firebrick")
+legend("bottomright", c("vs. naive sigma/sqrt(n)", "vs. dependence-adjusted SE",
+                        "Predicted naive ratio"),
+       col = c("black", "steelblue", "firebrick"), pch = c(19, 17, NA),
+       lty = c(1, 1, 3), bty = "n")
+```
+
+```{r}
+#| label: pictures
+#| fig-height: 12
+plot_sampling(sweep, c(1, 30, 100, n_star), mu = mu,
+              se_fun = function(n) sigma_lr / sqrt(n))
+```
+
+(The red curve uses the dependence-adjusted SE.)
+
+```{r}
+#| label: convergence
+#| fig-height: 3.5
+plot_convergence(tab)
+```
+
+## Theory vs. simulation
+
+- **Mean:** the simulated means are all within `r round(max(abs(tab$sim_mean - mu)), 3)` of the long-run mean `r round(mu, 3)`. The sample mean is still unbiased, it's just unbiased for 1.67, not for 1.
+- **Standard error:** for $n \ge 10$, the naive ratio stays around `r round(median(tab$se_ratio[tab$n >= 10]), 3)`, right where the autocorrelations predicted (`r round(sqrt(inflation), 3)`). The adjusted ratio sits near 1. **If I had used $\sigma/\sqrt n$ here, every confidence interval would have been about `r round(100 * (1 / sqrt(inflation) - 1))`% too wide.**
+- **Shape:** skewness falls much more slowly than for the independent exponential. At $n = 30$ it's still `r round(tab$skewness[tab$n == 30], 2)`, and it doesn't stay under 0.25 until $n = `r n_star`$.
+
+## When is it approximately normal?
+
+$$
+\boxed{n = `r n_star`}
+$$
+
+At $n = `r n_star`$ skewness is `r round(tab$skewness[tab$n == n_star], 3)`, excess kurtosis is `r round(tab$ex_kurt[tab$n == n_star], 3)`, and the Q-Q correlation is `r round(tab$qq_cor[tab$n == n_star], 4)`. The CLT does still kick in for this process. There are versions of the CLT for dependent data, as long as the dependence fades quickly enough, and here the correlations die off fast. But the iid formula for the SE is wrong, and convergence is slow, about 4 times the $n$ needed for the plain exponential.
+
+## What surprised me?
+
+- **The mean isn't 1.** I expected the long-run mean to be $1/\lambda_0 = 1$. It's `r round(mu, 2)`. When $X_{t-1}$ is short, the next rate gets *really* small (for example, $X_{t-1} = 0$ gives $\lambda = e^{-1.25} \approx 0.29$, so an expected next time of about 3.5). The rate goes down a lot more when times are short than it goes up when they're long, so on average the times come out longer than 1.
+- **Dependence made the SE smaller, not bigger.** I assumed dependence would always make things worse. With negative correlation, highs and lows cancel and the mean is *more* stable. (With positive correlation, like a machine that keeps getting worse, the SE would be bigger than the formula.) Either way, the iid formula is wrong.
+
+```{r}
+#| label: save
+save_results("Dependent Machine Failure", tab, n_star,
+             "Not independent: naive SE ~15% too big, slow convergence")
+```

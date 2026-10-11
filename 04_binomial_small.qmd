@@ -1,0 +1,95 @@
+---
+title: "4. Binomial Small (n = 5, p = 0.10)"
+subtitle: "Skewed AND lumpy: two problems at once"
+---
+
+```{r}
+#| label: setup
+source("R/clt_helpers.R")
+size <- 5; prob <- 0.10
+gen_binom <- function(k) rbinom(k, size = size, prob = prob)
+```
+
+## What population am I sampling from?
+
+Each observation is the number of successes in 5 trials with success probability 0.10, from `rbinom(size = 5, prob = 0.1)`. One heads-up on notation: the binomial's "$n = 5$" is the number of **trials inside one observation**. It's not my sample size. I'll call the binomial parameter `size` so I don't mix them up.
+
+This population is **highly discrete** (values 0 to 5, but really almost always 0 or 1) and **right-skewed**: 59% of the time the value is 0.
+
+```{r}
+#| label: population
+#| fig-height: 4
+plot_population(gen_binom, "Population: Binomial(size = 5, p = 0.10)", discrete = TRUE)
+round(dbinom(0:5, size, prob), 4)
+```
+
+```{r}
+#| label: theory
+mu    <- size * prob                              # 0.5
+sigma <- sqrt(size * prob * (1 - prob))           # sqrt(0.45)
+g1    <- (1 - 2 * prob) / sigma                   # skewness
+g2    <- (1 - 6 * prob * (1 - prob)) / sigma^2    # excess kurtosis
+data.frame(mean = mu, sd = sigma, skewness = g1, excess_kurtosis = g2)
+```
+
+## What did I expect?
+
+The skewness is `r round(g1, 3)`, smaller than the exponential's 2, so based on skewness alone it should converge faster than the exponential:
+
+```{r}
+predicted_n(g1, g2)
+```
+
+So my theory-only guess is about $n = 23$. But I expect the discreteness to slow things down, because the mean of $n$ observations can only be a multiple of $1/n$, and most of the probability is piled up on a few values. My real guess is somewhere between 25 and 60.
+
+## Which sample sizes did I investigate?
+
+The standard grid from 1 to 500, with $B = `r format(B, big.mark = ",")`$ repetitions at each $n$.
+
+## Simulation
+
+```{r}
+#| label: simulate
+sweep  <- run_sweep(function(n) simulate_means(gen_binom, n, B), mu = mu, sigma = sigma)
+tab    <- sweep$table
+n_star <- chosen_n(tab)
+show_table(tab)
+```
+
+```{r}
+#| label: pictures
+#| fig-height: 12
+plot_sampling(sweep, c(1, 5, 30, n_star), mu = mu, sigma = sigma)
+```
+
+```{r}
+#| label: convergence
+#| fig-height: 3.5
+plot_convergence(tab)
+```
+
+## Theory vs. simulation
+
+- **Mean:** all simulated means are within `r round(max(abs(tab$sim_mean - mu)), 3)` of 0.5.
+- **Standard error:** simulated SE / $(\sigma/\sqrt n)$ ranged from `r round(min(tab$se_ratio), 3)` to `r round(max(tab$se_ratio), 3)`.
+- **Shape:** skewness first drops below 0.25 at $n = `r min(tab$n[abs(tab$skewness) < skew_cut])`$, close to the theory prediction of `r predicted_n(g1, g2)$prediction`.
+
+## When is it approximately normal?
+
+$$
+\boxed{n = `r n_star`}
+$$
+
+This is a lot bigger than the skewness-only prediction. Looking at the table, skewness and kurtosis were both fine by around $n = 30$, but the **Q-Q correlation** didn't stay above 0.998 until $n = `r n_star`$. The Q-Q plots show why: even at $n = 30$ the points form visible horizontal steps, because the sample mean can only be $0, 1/30, 2/30, \dots$ and a lot of samples tie at the same values.
+
+So for this population there are really two separate problems: skewness (which theory handles well) and discreteness (which theory based on moments doesn't capture at all).
+
+## What surprised me?
+
+I didn't expect the binomial to end up needing about as large an $n$ as the exponential, or even larger, since its skewness is a lot smaller. The discreteness ended up mattering more than I thought. I also noticed that at $n = 1$ and $n = 2$ the histogram barely looks like it changes, since with $p = 0.1$ nearly every sample is just a bunch of zeros and ones.
+
+```{r}
+#| label: save
+save_results("Binomial Small (5, 0.1)", tab, n_star,
+             "Skewness fine by ~30 but discreteness keeps Q-Q plot stair-stepped")
+```

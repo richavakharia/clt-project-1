@@ -1,0 +1,94 @@
+---
+title: "1. Standard Normal Population"
+subtitle: "The control case: what 'already normal' looks like"
+---
+
+```{r}
+#| label: setup
+source("R/clt_helpers.R")
+```
+
+## What population am I sampling from?
+
+The standard normal, $N(\mu = 0, \sigma = 1)$, generated with `rnorm()`. It's continuous, symmetric, unbounded, and has skewness 0 and excess kurtosis 0. This is my **control case**: if my method can't call *this* normal, something is wrong with my method.
+
+```{r}
+#| label: population
+#| fig-height: 4
+plot_population(rnorm, "Population: Standard Normal")
+curve(dnorm(x), add = TRUE, col = "firebrick", lwd = 2)
+```
+
+| Quantity | Theoretical value |
+|---|---|
+| Mean $\mu$ | 0 |
+| SD $\sigma$ | 1 |
+| Skewness | 0 |
+| Excess kurtosis | 0 |
+| $SE(\bar X)$ | $1/\sqrt{n}$ |
+
+## What did I expect?
+
+A sum of independent normals is exactly normal, so $\bar X \sim N(0, 1/n)$ for **every** $n$, even $n = 1$. I expect my rule to pass at $n = 1$. The theory-based prediction from my helper agrees:
+
+```{r}
+predicted_n(g1 = 0, g2 = 0)
+```
+
+The useful part of this file is seeing how much the diagnostics bounce around from pure Monte Carlo noise when the answer is known to be "perfectly normal." That noise level is the baseline I compare every other population against.
+
+## Which sample sizes did I investigate?
+
+The same grid I use for every population, so results are comparable:
+
+```{r}
+n_grid
+```
+
+It's dense at small $n$ (1 to 20), where shapes change quickly, and gets sparser up to $n = 500$. For each $n$ I generate $B = `r format(B, big.mark = ",")`$ samples. Remember $n$ is the size of *one* sample and $B$ is how many samples I repeat.
+
+## Simulation
+
+```{r}
+#| label: simulate
+sweep <- run_sweep(function(n) simulate_means(rnorm, n, B), mu = 0, sigma = 1)
+tab   <- sweep$table
+n_star <- chosen_n(tab)
+show_table(tab)
+```
+
+```{r}
+#| label: pictures
+#| fig-height: 9
+plot_sampling(sweep, c(1, 5, 30), mu = 0, sigma = 1)
+```
+
+```{r}
+#| label: convergence
+#| fig-height: 3.5
+plot_convergence(tab)
+```
+
+## Theory vs. simulation
+
+- **Mean:** the simulated means range from `r signif(min(tab$sim_mean), 2)` to `r signif(max(tab$sim_mean), 2)`, all basically 0.
+- **Standard error:** the ratio of simulated SE to $\sigma/\sqrt{n}$ stays between `r round(min(tab$se_ratio), 3)` and `r round(max(tab$se_ratio), 3)`. So $\sigma/\sqrt n$ is right to within about 2%.
+- **Shape:** the largest |skewness| across all $n$ was `r round(max(abs(tab$skewness)), 3)` and the largest |excess kurtosis| was `r round(max(abs(tab$ex_kurt)), 3)`. Those are pure noise, and both are far below my cutoffs (0.25 and 0.50).
+
+## When is it approximately normal?
+
+$$
+\boxed{n = `r n_star`}
+$$
+
+Every diagnostic passes at every $n$. The histogram matches the red normal curve and the Q-Q plot is a straight line from $n = 1$.
+
+## What surprised me?
+
+Even though the data is *truly* normal, the Shapiro-Wilk test gave $p < 0.05$ at `r sum(tab$shapiro_p < 0.05)` of the `r nrow(tab)` sample sizes. That's about what you'd expect from a 5% false alarm rate, but it was a good reminder that one p-value can't be the deciding factor. If I'd used "Shapiro p > 0.05" as my only rule, I would have said a *normal* distribution wasn't normal at some sample sizes.
+
+```{r}
+#| label: save
+save_results("Standard Normal", tab, n_star,
+             "Exactly normal at every n; shows the Monte Carlo noise floor")
+```

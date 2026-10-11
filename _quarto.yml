@@ -1,0 +1,28 @@
+project:
+  type: default
+  render:
+    - 01_normal.qmd
+    - 02_six_sided_die.qmd
+    - 03_exponential.qmd
+    - 04_binomial_small.qmd
+    - 05_cauchy.qmd
+    - 06_dependent_machine_failure.qmd
+    - 07_non_identical_basketball.qmd
+    - 08_age_at_death.qmd
+    - 09_summary.qmd
+
+author: "Richa Vakharia"
+
+format:
+  html:
+    theme: cosmo
+    toc: true
+    number-sections: true
+    code-fold: true
+    code-tools: true
+    embed-resources: true
+    fig-width: 8
+
+execute:
+  warning: false
+  message: false

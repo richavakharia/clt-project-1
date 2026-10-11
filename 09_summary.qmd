@@ -1,0 +1,143 @@
+---
+title: "9. Final Summary: Is the Answer Really 30?"
+subtitle: "Comparing all eight populations"
+---
+
+```{r}
+#| label: setup
+source("R/clt_helpers.R")
+files <- c("standard_normal", "six_sided_die", "exponential", "binomial_small_5_0_1_",
+           "cauchy", "dependent_machine_failure", "non_identical_bernoulli_basketball_",
+           "life_death_age_at_death_")
+res <- lapply(file.path("results", paste0(files, ".rds")), readRDS)
+names(res) <- sapply(res, `[[`, "name")
+```
+
+## What I did
+
+For each of 8 populations I simulated $B = `r format(B, big.mark = ",")`$ samples at each of `r length(n_grid)` sample sizes from $n = 1$ to $n = 500$, computed the sample mean of every sample, and checked whether the distribution of those means was "normal enough."
+
+**My "normal enough" standard** (applied the same way to every population):
+
+| Check | Cutoff | Why |
+|---|---|---|
+| \|Skewness\| | < `r skew_cut` | Point where a histogram starts to look visibly lopsided; about 10x the Monte Carlo noise |
+| \|Excess kurtosis\| | < `r kurt_cut` | Tails not noticeably heavier or lighter than normal; about 10x the noise |
+| Q-Q correlation | > `r qq_cut` | The Q-Q plot is close to a straight line |
+| Stays passing | for every larger $n$ tested | So one lucky run can't pick the answer |
+
+I also looked at histograms, Q-Q plots, the Shapiro-Wilk test, and whether the simulated SE matched $\sigma/\sqrt n$. I did **not** use Shapiro-Wilk as a deciding rule, because with 5,000 values it rejects even tiny, unimportant departures (it rejected the *actual normal* at a couple of sample sizes and the die at almost every $n$).
+
+## Results table
+
+```{r}
+#| label: final-table
+assumption <- c("All met (control)", "All met", "All met", "All met",
+                "Finite variance FAILS", "Independence FAILS",
+                "Identical distribution FAILS", "All met")
+pop_skew <- c("0", "0", "2", "1.19", "undefined", "2.89 (long run)", "-2.67 to 0 (varies by shot)", "-0.86")
+
+summary_tab <- do.call(rbind, lapply(seq_along(res), function(i) {
+  r <- res[[i]]; t <- r$table
+  at <- if (is.na(r$n_star)) t[nrow(t), ] else t[t$n == r$n_star, ]
+  data.frame(
+    Population = r$name,
+    `CLT assumption` = assumption[i],
+    `Population skewness` = pop_skew[i],
+    `Smallest n judged normal` = ifelse(is.na(r$n_star), "None (fails at all n)", r$n_star),
+    `Skewness at chosen n` = round(at$skewness, 3),
+    `Excess kurtosis at chosen n` = round(at$ex_kurt, 3),
+    `Q-Q cor at chosen n` = round(at$qq_cor, 4),
+    `Sim SE / (sigma/sqrt n), n>=10` = if (all(is.na(t$se_ratio))) "undefined" else
+      paste0(round(min(t$se_ratio[t$n >= 10]), 2), " to ", round(max(t$se_ratio[t$n >= 10]), 2)),
+    `Passes at n = 30?` = ifelse(t$normal_enough[t$n == 30], "Yes", "No"),
+    `Key observation` = r$note,
+    check.names = FALSE
+  )
+}))
+knitr::kable(summary_tab, row.names = FALSE)
+```
+
+(For the Cauchy, the shape columns show $n = 500$, the largest $n$ tested. For the basketball model, "SE" uses the correct non-identical formula. For the dependent process, it uses the naive $\sigma/\sqrt n$.)
+
+## Convergence across populations
+
+```{r}
+#| label: all-skew
+#| fig-height: 5
+cols <- c("black", "gray50", "firebrick", "darkorange", "purple", "steelblue", "darkgreen", "goldenrod")
+plot(NA, xlim = c(1, 500), ylim = c(-1, 3.2), log = "x",
+     xlab = "Sample size n (log scale)", ylab = "Skewness of sample means",
+     main = "How fast skewness disappears")
+rect(1, -skew_cut, 500, skew_cut, col = rgb(0, 0.6, 0, 0.1), border = NA)
+for (i in seq_along(res)) {
+  if (res[[i]]$name == "Cauchy") next
+  t <- res[[i]]$table
+  lines(t$n, t$skewness, type = "b", pch = 19, cex = 0.6, col = cols[i])
+}
+abline(v = 30, lty = 2)
+text(30, 3.1, "n = 30", pos = 4)
+legend("topright", names(res)[names(res) != "Cauchy"], col = cols[-5], lty = 1,
+       pch = 19, cex = 0.75, bty = "n")
+```
+
+The shaded band is my $|\text{skewness}| < 0.25$ zone. (Cauchy is left off because its skewness is in the dozens and jumps around randomly.)
+
+```{r}
+#| label: chosen-bar
+#| fig-height: 4.5
+ns <- sapply(res, function(r) ifelse(is.na(r$n_star), NA, r$n_star))
+ord <- order(ns, na.last = TRUE)
+bp <- barplot(ifelse(is.na(ns[ord]), 0, ns[ord]), horiz = TRUE, las = 1,
+              names.arg = names(ns)[ord], col = cols[ord], xlim = c(0, 550),
+              xlab = "Smallest n judged normal", cex.names = 0.7,
+              main = "Chosen n by population")
+abline(v = 30, lty = 2)
+text(ifelse(is.na(ns[ord]), 5, ns[ord]), bp,
+     ifelse(is.na(ns[ord]), "never", ns[ord]), pos = 4, cex = 0.8)
+```
+
+## Answering the big questions
+
+### Is there a universal rule like $n = 30$?
+
+**No.** My chosen $n$ ranged from `r min(ns, na.rm = TRUE)` (normal) to `r max(ns, na.rm = TRUE)` (dependent process), and for the Cauchy no $n$ works at all. Only `r sum(sapply(res, function(r) r$table$normal_enough[r$table$n == 30]))` of the 8 populations passed my standard at $n = 30$. The "30" rule works for populations that are already roughly symmetric (normal, die, age-at-death) and fails for skewed ones like the exponential, where the skewness of $\bar X$ is still $2/\sqrt{30} \approx 0.37$.
+
+A better rule than "30" for i.i.d. data is to look at the population's skewness $g_1$. Since the skewness of $\bar X$ is $g_1/\sqrt n$, you need roughly
+
+$$
+n \gtrsim \left(\frac{g_1}{0.25}\right)^2
+$$
+
+for my standard. This predicted the exponential (64 predicted, `r ns["Exponential"]` found) and the age-at-death distribution (12 predicted, `r ns["Life/Death (age at death)"]` found) really well.
+
+### Which populations converged fastest and slowest, and why?
+
+- **Fastest:** the normal (already normal), the die, and the age-at-death distribution. All three have little or no skewness and bounded or light tails.
+- **Middle:** the exponential and the small binomial. The exponential is slowed by **skewness**. The binomial is slowed by **skewness plus discreteness**: its skewness was fine by about $n = 30$, but the Q-Q plot stayed stair-stepped until $n = `r ns["Binomial Small (5, 0.1)"]`$.
+- **Slowest:** the dependent machine-failure process, and the Cauchy never got there.
+
+The main drivers were (1) **skewness**, (2) **tail weight**, and (3) **discreteness**. How "weird" the population looked mattered a lot less: the bimodal age-at-death distribution converged faster than the smooth exponential.
+
+### What happened when assumptions broke?
+
+- **Heavy tails (Cauchy, infinite variance):** the CLT completely fails. The IQR of the sample mean stayed at about 2 for every $n$ from 1 to 500, so averaging 500 values was no better than 1. This is the only case where the CLT truly failed.
+- **Dependence (machine failure):** the CLT still worked eventually, but it took about $n = `r ns["Dependent Machine Failure"]`$, and **the usual SE formula was wrong** by about 15% at every $n$. Since the correlation was negative, the real SE was *smaller* than $\sigma/\sqrt n$. With positive correlation it would be bigger. Either way, using the i.i.d. formula with dependent data gives wrong confidence intervals.
+- **Non-identical (basketball):** barely mattered. The fatigue model behaved almost exactly like an i.i.d. 70% shooter. The general (Lyapunov) CLT covers this case as long as no single observation dominates. The only catch is that you have to use the right SE formula, $\frac1n\sqrt{\sum p_t(1-p_t)}$, not the one based on the average $p$.
+
+### The difference between "the SE formula works" and "the shape is normal"
+
+One thing that came up over and over: $\sigma/\sqrt n$ was accurate (within about 2%) for every i.i.d. population with finite variance, **even at $n = 1$**, when the shape was nowhere near normal. The CLT is about the **shape** of the sampling distribution. The SE formula is a separate fact that's true for any $n$ as long as the data are independent with finite variance. The two broke separately: dependence broke the SE formula, and skewness slowed down the shape.
+
+## Reproducibility
+
+- Every simulation uses `set.seed(student_id + n)` where `student_id = 2418`, set right before each experiment. Each sample size gets its own seed so that different $n$ values don't reuse the same random numbers (I learned this the hard way with the Cauchy; see `05_cauchy.qmd`).
+- In `03_exponential.qmd` I reran the full exponential sweep with a different seed. The exact numbers changed but the conclusion (somewhere around 60 to 80, definitely not 30) didn't.
+- Everything uses base R plus `knitr`, so anyone can run `quarto render` and get the same results.
+
+## Limitations
+
+- My cutoffs (0.25, 0.50, 0.998) are a judgment call. A stricter skewness cutoff like 0.1 would push the exponential to around $n = 400$. The *ranking* of populations wouldn't change, though.
+- My $n$ grid has gaps (for example 70, 80, 90), so the true cutoff could be anywhere between grid points.
+- The Q-Q correlation punishes discrete distributions for being discrete, even when the overall bell shape is fine. Someone could reasonably say the binomial is "normal enough" at a smaller $n$ than mine.
+- $B = 10{,}000$ means skewness estimates have noise of about $\pm 0.025$. Near the cutoff that can flip a decision by one grid step.

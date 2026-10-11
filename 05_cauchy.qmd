@@ -1,0 +1,131 @@
+---
+title: "5. Cauchy Population"
+subtitle: "When the CLT doesn't apply at all"
+---
+
+```{r}
+#| label: setup
+source("R/clt_helpers.R")
+gen_cauchy <- function(k) rcauchy(k, location = 0, scale = 1)
+```
+
+## What population am I sampling from?
+
+The standard Cauchy distribution (location 0, scale 1), from `rcauchy()`. It's symmetric and bell-ish in the middle, but it has **extremely heavy tails**. Values in the thousands or millions show up every so often.
+
+```{r}
+#| label: population
+#| fig-height: 4
+plot_population(gen_cauchy, "Population: Cauchy (zoomed to [-10, 10])", xlim = c(-10, 10))
+curve(dcauchy(x), add = TRUE, col = "firebrick", lwd = 2)
+curve(dnorm(x), add = TRUE, col = "gray30", lwd = 2, lty = 2)
+legend("topright", c("Cauchy density", "Normal density"),
+       col = c("firebrick", "gray30"), lty = c(1, 2), lwd = 2, bty = "n")
+```
+
+| Quantity | Theoretical value |
+|---|---|
+| Mean | **does not exist** |
+| SD | **does not exist** (infinite variance) |
+| Median | 0 |
+| IQR | 2 (quartiles at -1 and 1) |
+| $SE(\bar X) = \sigma / \sqrt n$ | **undefined**, there is no $\sigma$ |
+
+## What did I expect?
+
+The CLT needs a **finite variance**, and the Cauchy doesn't have one. There's actually a known result that the mean of $n$ independent standard Cauchy values is *still* standard Cauchy, for every $n$. So I predict that the sampling distribution of $\bar X$ never gets narrower and never becomes normal, no matter how big $n$ gets. My theory-based `predicted_n()` doesn't even apply because there are no moments to plug in.
+
+## Which sample sizes did I investigate?
+
+The standard grid from 1 to 500, with $B = `r format(B, big.mark = ",")`$ repetitions at each $n$. If anything was going to settle down, it should show up by $n = 500$, which is way past anything that worked for the other populations.
+
+## Simulation
+
+```{r}
+#| label: simulate
+sweep  <- run_sweep(function(n) simulate_means(gen_cauchy, n, B))
+tab    <- sweep$table
+n_star <- chosen_n(tab)
+show_table(tab[, c("n", "sim_mean", "sim_se", "skewness", "ex_kurt",
+                   "qq_cor", "shapiro_p", "normal_enough")])
+```
+
+The usual summaries are basically garbage here. The "mean of the means" jumps around randomly and the skewness and kurtosis are huge and unstable. That's because those statistics are themselves averages, and averages of Cauchy values don't settle. So I switched to **robust** summaries that don't depend on the mean existing: the median and IQR of the sample means.
+
+```{r}
+#| label: robust
+robust <- data.frame(
+  n = tab$n,
+  median_of_means = sapply(sweep$means, median),
+  IQR_of_means    = sapply(sweep$means, IQR),
+  largest_abs_mean = sapply(sweep$means, function(m) max(abs(m)))
+)
+knitr::kable(signif(robust, 4), row.names = FALSE)
+```
+
+```{r}
+#| label: iqr-plot
+#| fig-height: 4
+plot(robust$n, robust$IQR_of_means, log = "x", type = "b", pch = 19,
+     ylim = c(0, 2.5), xlab = "n (log scale)", ylab = "IQR of sample means",
+     main = "Spread of the sample mean does NOT shrink")
+abline(h = 2, col = "firebrick", lty = 2)
+# what the IQR would be if it shrank like 1/sqrt(n), starting from 2
+lines(robust$n, 2 / sqrt(robust$n), col = "steelblue", lwd = 2)
+legend("right", c("Simulated IQR", "Cauchy IQR = 2", "If it shrank like 1/sqrt(n)"),
+       col = c("black", "firebrick", "steelblue"), lty = c(1, 2, 1),
+       pch = c(19, NA, NA), bty = "n")
+```
+
+The pictures below are zoomed into the middle 98% of the sample means, otherwise every histogram would just be a single spike:
+
+```{r}
+#| label: pictures
+#| fig-height: 9
+plot_sampling(sweep, c(1, 30, 500), trim = 0.01)
+```
+
+One long sequence makes the same point. The running mean of an exponential sample settles down to 1. The running mean of a Cauchy sample keeps getting knocked around by giant values:
+
+```{r}
+#| label: running-mean
+#| fig-height: 4
+set.seed(student_id)
+N <- 10000
+run_exp    <- cumsum(rexp(N)) / (1:N)
+run_cauchy <- cumsum(rcauchy(N)) / (1:N)
+plot(run_cauchy, type = "l", col = "firebrick", ylim = c(-5, 5),
+     xlab = "Number of observations", ylab = "Running mean",
+     main = "Running mean: Cauchy never settles")
+lines(run_exp - 1, col = "steelblue")
+abline(h = 0, lty = 2)
+legend("topright", c("Cauchy", "Exponential (shifted by -1)"),
+       col = c("firebrick", "steelblue"), lty = 1, bty = "n")
+```
+
+## Theory vs. simulation
+
+- **Mean:** there's no theoretical mean to compare to. The median of the sample means stays near 0 (largest |median| = `r signif(max(abs(robust$median_of_means)), 2)`), because the *median* of the Cauchy does exist.
+- **Standard error:** $\sigma/\sqrt n$ is undefined. The IQR of $\bar X$ stays between `r round(min(robust$IQR_of_means), 2)` and `r round(max(robust$IQR_of_means), 2)` for every $n$, which matches the standard Cauchy IQR of 2. If the CLT worked, the IQR at $n = 500$ would be about $2/\sqrt{500} \approx `r round(2/sqrt(500), 2)`$.
+- **Shape:** the Q-Q correlation never gets above `r round(max(tab$qq_cor), 3)` and the Q-Q plots have the classic heavy-tail "S" shape at every $n$.
+
+## When is it approximately normal?
+
+$$
+\boxed{\text{No value of } n \text{ works}}
+$$
+
+My rule fails at every $n$ from 1 to 500, and the theory says it will fail at every $n$ forever. Averaging 500 Cauchy values gives you exactly as much spread as 1 value. The reason is that a single huge observation can dominate the whole sum. When you average more values you also give yourself more chances to draw one of those huge values, and those two effects cancel out exactly.
+
+## What surprised me?
+
+Two things.
+
+1. The IQR of the sample means stayed almost exactly at 2. I knew the theory, but seeing that $n = 500$ gives the same spread as $n = 1$ was still weird.
+2. When I first wrote the simulation I used the *same* seed for every $n$. The Cauchy results looked really strange: skewness was stuck at almost exactly 99.9 for every $n$ from 20 to 150. I figured out that because the seed was the same, every sample size was reusing the same random numbers in the same order, so one gigantic value early in the stream was showing up in one sample at every $n$. I changed the seed to `student_id + n` so each sample size gets its own independent draws while staying reproducible. (Details in `ai_prompts.md`.)
+
+```{r}
+#| label: save
+save_results("Cauchy", tab, NA,
+             "Infinite variance: IQR of the mean stays at 2 for every n")
+```

@@ -1,0 +1,115 @@
+---
+title: "8. Life/Death Population (Extra Credit)"
+subtitle: "An irregular, bimodal, real-world-inspired distribution"
+---
+
+```{r}
+#| label: setup
+source("R/clt_helpers.R")
+```
+
+## What population am I sampling from?
+
+The custom age-at-death distribution from the class handout. Ages are whole numbers from 0 to 100, and the probabilities come from mixing two pieces:
+
+- an **early-death** piece that starts high at age 0 and decays quickly: $0.045\,e^{-x/5}$
+- an **adult-death** piece shaped like a bell curve centered at 65: $0.030\,e^{-\frac12\left(\frac{x-65}{10}\right)^2}$
+
+Then everything is divided by the total so the probabilities add to 1. This is a synthetic distribution built to have a realistic shape. It's not a real life table.
+
+```{r}
+#| label: build
+age    <- 0:100
+weight <- 0.045 * exp(-age / 5) + 0.030 * exp(-0.5 * ((age - 65) / 10)^2)
+prob   <- weight / sum(weight)
+
+death_distribution <- data.frame(age = age, probability = prob)
+sum(death_distribution$probability)   # should be 1
+
+rdeath <- function(n) {
+  sample(death_distribution$age, size = n, replace = TRUE,
+         prob = death_distribution$probability)
+}
+```
+
+```{r}
+#| label: population
+#| fig-height: 4
+plot(age, 100 * prob, type = "h", lwd = 3, col = "darkorange",
+     xlab = "Age at death", ylab = "Percent of deaths",
+     main = "Population: Custom Age-at-Death Distribution")
+```
+
+```{r}
+#| label: theory
+mu    <- sum(age * prob)
+sigma <- sqrt(sum((age - mu)^2 * prob))
+g1    <- sum(((age - mu) / sigma)^3 * prob)
+g2    <- sum(((age - mu) / sigma)^4 * prob) - 3
+data.frame(mean = mu, sd = sigma, skewness = g1, excess_kurtosis = g2,
+           median = age[which(cumsum(prob) >= 0.5)[1]])
+```
+
+This population is **bimodal** (two peaks), **left-skewed** (skewness `r round(g1, 2)`, because the early-death bump pulls a tail toward 0), and has **negative excess kurtosis** (`r round(g2, 2)`), because the probability is spread out across two humps instead of piled up in the middle. The mean (`r round(mu, 1)`) lands in the gap between the two peaks, at an age where very few people actually die. So the "average age at death" doesn't describe a typical person at all.
+
+## What did I expect?
+
+Bimodal sounds scary, but the CLT only cares about finite variance, and this population is bounded between 0 and 100, so the variance is definitely finite. Based on skewness:
+
+```{r}
+predicted_n(g1, g2)
+```
+
+I expect it to converge somewhere around $n = 12$: faster than the exponential (skewness 2) but slower than the die (skewness 0). I'm also expecting the two humps to disappear quickly, since averaging even 2 or 3 people mixes "early" and "adult" deaths together.
+
+## Which sample sizes did I investigate?
+
+The standard grid from 1 to 500, with $B = `r format(B, big.mark = ",")`$ repetitions at each $n$.
+
+## Simulation
+
+```{r}
+#| label: simulate
+sweep  <- run_sweep(function(n) simulate_means(rdeath, n, B), mu = mu, sigma = sigma)
+tab    <- sweep$table
+n_star <- chosen_n(tab)
+show_table(tab)
+```
+
+```{r}
+#| label: pictures
+#| fig-height: 12
+plot_sampling(sweep, c(1, 2, 5, n_star), mu = mu, sigma = sigma)
+```
+
+```{r}
+#| label: convergence
+#| fig-height: 3.5
+plot_convergence(tab)
+```
+
+## Theory vs. simulation
+
+- **Mean:** all simulated means are within `r round(max(abs(tab$sim_mean - mu)), 2)` years of `r round(mu, 2)`.
+- **Standard error:** simulated SE / $(\sigma/\sqrt n)$ ranges from `r round(min(tab$se_ratio), 3)` to `r round(max(tab$se_ratio), 3)`.
+- **Shape:** skewness starts at `r round(tab$skewness[1], 2)` and shrinks toward 0 at close to the $g_1/\sqrt n$ rate.
+
+## When is it approximately normal?
+
+$$
+\boxed{n = `r n_star`}
+$$
+
+At $n = `r n_star`$ skewness is `r round(tab$skewness[tab$n == n_star], 3)`, excess kurtosis is `r round(tab$ex_kurt[tab$n == n_star], 3)`, and the Q-Q correlation is `r round(tab$qq_cor[tab$n == n_star], 4)`. Right in line with my prediction.
+
+## What surprised me?
+
+The two peaks were gone by $n = 2$. At $n = 2$ the histogram has a single lump with a tail on the left. That makes sense once I thought about it: the mean of two people only stays near 0 if *both* of them died young, which happens with probability around $0.24^2 \approx 6\%$. Mixing groups together kills the bimodality fast.
+
+The bigger lesson: a distribution that *looks* weird and irregular isn't necessarily hard for the CLT. What matters is skewness and tail weight, not how many bumps there are. This messy-looking population converged faster than the smooth, simple exponential.
+
+```{r}
+#| label: save
+save_results("Life/Death (age at death)", tab, n_star,
+             "Bimodal but bounded; bumps vanish by n = 2, mild left skew")
+```
